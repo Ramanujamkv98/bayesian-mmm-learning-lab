@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from .performance import timed
+
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "model" / "hierarchical_mmm_model_2.nc"
 DATA_PATH = ROOT / "data" / "gold_model_dataset.csv"
@@ -38,6 +40,7 @@ class ModelArtifacts:
     show_season_lookup: dict[str, int]
     constant_data: dict[str, np.ndarray]
     model_path: Path
+    fingerprint: str
 
     @property
     def n_samples(self) -> int:
@@ -54,29 +57,30 @@ def _control_frame(frame: pd.DataFrame, control_names: list[str]) -> pd.DataFram
 
 
 def load_artifacts(model_path: Path = MODEL_PATH, data_path: Path = DATA_PATH) -> ModelArtifacts:
-    data = pd.read_csv(data_path, parse_dates=["Air_Date"])
-    data = data.sort_values(["Show", "Season", "Week_Number", "Air_Date"]).reset_index(drop=True)
-    latest = data.groupby("Show")["Season"].transform("max")
-    train_mask = (data["Season"] != latest).to_numpy()
+    with timed("model loading and posterior preprocessing"):
+        data = pd.read_csv(data_path, parse_dates=["Air_Date"])
+        data = data.sort_values(["Show", "Season", "Week_Number", "Air_Date"]).reset_index(drop=True)
+        latest = data.groupby("Show")["Season"].transform("max")
+        train_mask = (data["Season"] != latest).to_numpy()
 
-    with h5py.File(model_path, "r") as file:
-        posterior_group = file["posterior"]
-        coords = {
-            name: _decode(posterior_group[name][...])
-            for name in ("channel", "control", "show", "show_season")
-        }
-        posterior: dict[str, np.ndarray] = {}
-        coordinate_names = {"chain", "draw", "channel", "control", "show", "show_season", "obs"}
-        for name, dataset in posterior_group.items():
-            if name in coordinate_names:
-                continue
-            values = dataset[...]
-            posterior[name] = values.reshape((-1,) + values.shape[2:])
-        constant_data = {
-            name: dataset[...]
-            for name, dataset in file["constant_data"].items()
-            if name not in {"obs", "channel", "control", "lag"}
-        }
+        with h5py.File(model_path, "r") as file:
+            posterior_group = file["posterior"]
+            coords = {
+                name: _decode(posterior_group[name][...])
+                for name in ("channel", "control", "show", "show_season")
+            }
+            posterior: dict[str, np.ndarray] = {}
+            coordinate_names = {"chain", "draw", "channel", "control", "show", "show_season", "obs"}
+            for name, dataset in posterior_group.items():
+                if name in coordinate_names:
+                    continue
+                values = dataset[...]
+                posterior[name] = values.reshape((-1,) + values.shape[2:])
+            constant_data = {
+                name: dataset[...]
+                for name, dataset in file["constant_data"].items()
+                if name not in {"obs", "channel", "control", "lag"}
+            }
 
     controls = _control_frame(data, coords["control"])
     train_controls = controls.loc[train_mask]
@@ -105,6 +109,7 @@ def load_artifacts(model_path: Path = MODEL_PATH, data_path: Path = DATA_PATH) -
         show_season_lookup={name: i for i, name in enumerate(coords["show_season"])},
         constant_data=constant_data,
         model_path=model_path,
+        fingerprint=f"{model_path.stat().st_size}:{model_path.stat().st_mtime_ns}",
     )
 
 
