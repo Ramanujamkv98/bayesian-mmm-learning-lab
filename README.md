@@ -74,6 +74,18 @@ streamlit run app.py
 
 Run the validation suite with `pytest -q`. The central regression test reconstructs every saved `mu_all` value across all 4,000 draws and 420 observations, then requires numerical equality with the notebook output.
 
+## Performance and profiling
+
+The posterior is loaded once with `st.cache_resource`. Deterministic draw selections, historical predictions, contribution inputs, and fitted saturation curves use `st.cache_data`. Pages that display one selected week use an exact row evaluator, while the contribution page retains the full-sequence engine. Budget controls submit as a form, optimization evaluates only its selected-week objective, and mROAS runs on demand.
+
+Run the repeatable benchmark with:
+
+```bash
+python benchmarks/performance.py
+```
+
+Set `MMM_PROFILE=1` before starting Streamlit to log model-load, scenario-prediction, and budget-optimization timings during development. Profiling is silent by default in deployed environments.
+
 ## Deploy to Streamlit Community Cloud
 
 1. Put this folder in a GitHub repository. Keep `data/gold_model_dataset.csv` and `model/hierarchical_mmm_model_2.nc` at their current relative paths.
