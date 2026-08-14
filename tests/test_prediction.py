@@ -4,8 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mmm.model_loader import load_artifacts
-from mmm.prediction import predict_scenario, reproduce_stored_mu, select_draws
+from mmm.model_loader import load_artifacts, load_model_artifacts
+from mmm.prediction import (
+    predict_scenario,
+    predict_scenario_row,
+    reproduce_stored_mu,
+    select_draws,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,3 +47,67 @@ def test_invalid_scenario_inputs_are_rejected(artifacts):
         predict_scenario(scenario, artifacts, draws=5)
     with pytest.raises(ValueError, match="positive"):
         select_draws(10, 0)
+
+
+def test_model_loader_is_wrapped_as_cached_resource():
+    first = load_model_artifacts()
+    second = load_model_artifacts()
+    assert callable(load_model_artifacts.clear)
+    assert first.fingerprint == second.fingerprint
+    assert first.n_samples == second.n_samples == 4_000
+
+
+def test_posterior_subsampling_is_deterministic(artifacts):
+    first = select_draws(artifacts.n_samples, 500, seed=77)
+    second = select_draws(artifacts.n_samples, 500, seed=77)
+    different = select_draws(artifacts.n_samples, 500, seed=78)
+    np.testing.assert_array_equal(first, second)
+    assert not np.array_equal(first, different)
+
+
+@pytest.mark.parametrize("row", [0, 5, 14])
+def test_selected_row_engine_matches_original_full_engine(artifacts, row):
+    scenario = artifacts.data.iloc[:15].copy().reset_index(drop=True)
+    scenario.loc[5, "Digital_Spend"] *= 1.35
+    ids = select_draws(artifacts.n_samples, 500, seed=77)
+    reference = predict_scenario(scenario, artifacts, draw_indices=ids, seed=77)
+    optimized = predict_scenario_row(
+        scenario, row, artifacts, draw_indices=ids, seed=77
+    )
+
+    np.testing.assert_allclose(
+        optimized["expected_samples"],
+        reference["expected_samples"][:, row],
+        rtol=1e-12,
+        atol=1e-8,
+    )
+    np.testing.assert_allclose(
+        optimized["samples"], reference["samples"][:, row], rtol=1e-12, atol=1e-8
+    )
+    np.testing.assert_allclose(
+        optimized["channel_contribution_samples"],
+        reference["channel_contribution_samples"][:, row, :],
+        rtol=1e-12,
+        atol=1e-8,
+    )
+    assert optimized["lower"] == pytest.approx(reference["lower"][row], abs=1e-8)
+    assert optimized["upper"] == pytest.approx(reference["upper"][row], abs=1e-8)
+
+
+def test_fixed_reference_scenario_has_not_drifted(artifacts):
+    scenario = artifacts.data.iloc[:15].copy().reset_index(drop=True)
+    ids = select_draws(artifacts.n_samples, 500, seed=77)
+    result = predict_scenario_row(
+        scenario, 5, artifacts, draw_indices=ids, seed=77
+    )
+    assert np.median(result["expected_samples"]) == pytest.approx(
+        138755.1782637213, abs=1e-6
+    )
+    assert result["lower"] == pytest.approx(126310.98038310026, abs=1e-6)
+    assert result["upper"] == pytest.approx(151166.20937064843, abs=1e-6)
+    np.testing.assert_allclose(
+        result["channel_contributions"],
+        [30206.801451003594, 74247.32036011378, 57219.40144361115],
+        rtol=1e-12,
+        atol=1e-6,
+    )

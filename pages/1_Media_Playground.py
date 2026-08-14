@@ -3,8 +3,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from mmm.cache import historical_row_prediction
 from mmm.model_loader import CHANNELS, SPEND_COLUMNS, load_model_artifacts
-from mmm.prediction import predict_scenario
+from mmm.prediction import predict_scenario_row
 from mmm.ui import PALETTE, clean_figure, money, scenario_picker, setup_page
 
 setup_page(
@@ -32,41 +33,52 @@ for i, (channel, column) in enumerate(zip(CHANNELS, SPEND_COLUMNS)):
         format="$%.0f",
     )
 
-ids = np.random.default_rng(17).choice(
-    artifacts.n_samples,
+show = str(current.loc[row, "Show"])
+season = int(current.loc[row, "Season"])
+
+base = historical_row_prediction(
+    show,
+    season,
+    row,
     500,
-    replace=False,
+    17,
+    artifacts.fingerprint,
+    artifacts,
 )
 
-base = predict_scenario(current, artifacts, draw_indices=ids, seed=17)
-user = predict_scenario(scenario, artifacts, draw_indices=ids, seed=17)
+user = predict_scenario_row(
+    scenario,
+    row,
+    artifacts,
+    draw_indices=base["draw_indices"],
+    seed=17,
+)
 
-i = row
-delta = user["expected_samples"][:, i] - base["expected_samples"][:, i]
+delta = user["expected_samples"] - base["expected_samples"]
 
 # The predictive interval is the longest value in this row, so reserve enough
 # room for both bounds instead of relying on Streamlit's ellipsis fallback.
 metrics = st.columns([1, 1.3, 1, 1])
 
-metrics[0].metric("Expected revenue", money(user["median"][i]))
+metrics[0].metric("Expected revenue", money(user["median"]))
 metrics[1].metric(
     "90% predictive interval",
-    f"{money(user['lower'][i])} – {money(user['upper'][i])}",
+    f"{money(user['lower'])} – {money(user['upper'])}",
 )
 metrics[2].metric(
     "Change vs current",
     money(np.median(delta)),
-    f"{np.median(delta) / max(abs(base['median'][i]), 1):+.1%}",
+    f"{np.median(delta) / max(abs(base['median']), 1):+.1%}",
 )
 
-media_increment = user["channel_contribution_samples"][:, i, :].sum(axis=1)
+media_increment = user["channel_contribution_samples"].sum(axis=1)
 metrics[3].metric("Media contribution", money(np.median(media_increment)))
 
 chart = pd.DataFrame(
     {
         "Channel": CHANNELS,
-        "Current": base["channel_contributions"][i],
-        "Your scenario": user["channel_contributions"][i],
+        "Current": base["channel_contributions"],
+        "Your scenario": user["channel_contributions"],
     }
 ).melt("Channel", var_name="Scenario", value_name="Contribution")
 
